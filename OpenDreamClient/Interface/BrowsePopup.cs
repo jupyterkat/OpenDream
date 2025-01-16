@@ -1,59 +1,56 @@
-﻿using System;
-using OpenDreamShared.Interface;
-using OpenDreamClient.Interface.Controls;
+﻿using OpenDreamClient.Interface.Controls;
+using OpenDreamClient.Interface.Descriptors;
+using OpenDreamClient.Interface.DMF;
 using Robust.Client.Graphics;
 using Robust.Client.UserInterface.Controls;
-using Robust.Shared.IoC;
-using Robust.Shared.Maths;
 
-namespace OpenDreamClient.Interface
-{
-    class BrowsePopup {
-        public event Action Closed;
+namespace OpenDreamClient.Interface;
 
-        public ControlBrowser Browser;
-        public ControlWindow WindowElement;
+internal sealed class BrowsePopup {
+    public event Action? Closed;
 
-        private OSWindow _window;
+    public readonly ControlBrowser Browser;
+    public readonly ControlWindow WindowElement;
 
-        public BrowsePopup(
-            string name,
-            Vector2i size,
-            IClydeWindow ownerWindow) {
-            WindowDescriptor popupWindowDescriptor = new WindowDescriptor(name, new() {
-                new ControlDescriptorMain() {
-                    Name = "main",
-                    Size = size
-                },
-                new ControlDescriptorBrowser() {
-                    Name = "browser",
-                    Size = size,
-                    Anchor1 = new Vector2i(0, 0),
-                    Anchor2 = new Vector2i(100, 100)
+    private readonly OSWindow _window;
+
+    public BrowsePopup(
+        string name,
+        Vector2i size,
+        IClydeWindow ownerWindow) {
+        WindowDescriptor popupWindowDescriptor = new WindowDescriptor(name,
+            new() {
+                new ControlDescriptorBrowser {
+                    Id = new DMFPropertyString("browser"),
+                    Size = new DMFPropertySize(size),
+                    Anchor1 = new DMFPropertyPos(0, 0),
+                    Anchor2 = new DMFPropertyPos(100, 100)
                 }
-            });
+            }) {
+                Size = new DMFPropertySize(size)
+            };
 
-            WindowElement = new ControlWindow(popupWindowDescriptor);
-            WindowElement.CreateChildControls(IoCManager.Resolve<IDreamInterfaceManager>());
+        WindowElement = new ControlWindow(popupWindowDescriptor);
+        WindowElement.CreateChildControls();
 
-            _window = WindowElement.CreateWindow();
-            _window.StartupLocation = WindowStartupLocation.CenterOwner;
-            _window.Owner = ownerWindow;
-            _window.Closed += OnWindowClosed;
+        _window = WindowElement.CreateWindow();
+        _window.StartupLocation = WindowStartupLocation.CenterOwner;
+        _window.Owner = ownerWindow;
+        _window.Closed += OnWindowClosed;
 
-            Browser = (ControlBrowser)WindowElement.ChildControls[0];
-        }
+        Browser = (ControlBrowser)WindowElement.ChildControls[0];
+    }
 
-        public void Open() {
-            _window.Show();
-            // _window.Focus();
-        }
+    public void Open() {
+        _window.Show();
+        // _window.Focus();
+    }
 
-        public void Close() {
-            _window.Close();
-        }
+    public void Close() {
+        _window.Close();
+    }
 
-        private void OnWindowClosed() {
-            Closed?.Invoke();
-        }
-    }}
+    private void OnWindowClosed() {
+        Closed?.Invoke();
+    }
+}

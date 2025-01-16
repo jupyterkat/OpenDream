@@ -2,28 +2,35 @@
 using Robust.Shared.GameObjects;
 using Robust.Shared.Serialization;
 using System;
-using System.Collections.Generic;
 
-namespace OpenDreamShared.Rendering {
-    public abstract class SharedAppearanceSystem : EntitySystem {
-        [Serializable, NetSerializable]
-        public class AllAppearancesEvent : EntityEventArgs {
-            public Dictionary<uint, IconAppearance> Appearances = new();
+namespace OpenDreamShared.Rendering;
 
-            public AllAppearancesEvent(Dictionary<uint, IconAppearance> appearances) {
-              Appearances = appearances;
-            }
-        }
+public abstract class SharedAppearanceSystem : EntitySystem {
+    public abstract ImmutableAppearance MustGetAppearanceById(uint appearanceId);
+    public abstract void RemoveAppearance(ImmutableAppearance appearance);
 
-        [Serializable, NetSerializable]
-        public class NewAppearanceEvent : EntityEventArgs {
-            public uint AppearanceId { get; }
-            public IconAppearance Appearance { get; }
+    [Serializable, NetSerializable]
+    public sealed class NewAppearanceEvent(uint appearanceId, MutableAppearance appearance) : EntityEventArgs {
+        public uint AppearanceId { get; } = appearanceId;
+        public MutableAppearance Appearance { get; } = appearance;
+    }
 
-            public NewAppearanceEvent(uint appearanceID, IconAppearance appearance) {
-                AppearanceId = appearanceID;
-                Appearance = appearance;
-            }
-        }
+    [Serializable, NetSerializable]
+    public sealed class RemoveAppearanceEvent(uint appearanceId) : EntityEventArgs {
+        public uint AppearanceId { get; } = appearanceId;
+    }
+
+    [Serializable, NetSerializable]
+    public sealed class AnimationEvent(NetEntity entity, uint targetAppearanceId, TimeSpan duration, AnimationEasing easing, int loop, AnimationFlags flags, int delay, bool chainAnim, uint? turfId)
+        : EntityEventArgs {
+        public NetEntity Entity = entity;
+        public uint TargetAppearanceId = targetAppearanceId;
+        public TimeSpan Duration = duration;
+        public AnimationEasing Easing = easing;
+        public int Loop = loop;
+        public AnimationFlags Flags = flags;
+        public int Delay = delay;
+        public bool ChainAnim = chainAnim;
+        public uint? TurfId = turfId;
     }
 }

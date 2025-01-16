@@ -1,18 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <Import Project="..\RobustToolbox\MSBuild\Robust.Properties.targets" />
   <PropertyGroup>
     <!-- Work around https://github.com/dotnet/project-system/issues/4314 -->
     <TargetFramework>$(TargetFramework)</TargetFramework>
     <OutputPath>..\bin\Content.IntegrationTests\</OutputPath>
     <IsPackable>false</IsPackable>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <LangVersion>9</LangVersion>
+    <LangVersion>12</LangVersion>
+    <NoWarn>NU1507</NoWarn>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RootNamespace>Content.IntegrationTests</RootNamespace>
+    <AssemblyName>Content.IntegrationTests</AssemblyName>
   </PropertyGroup>
-  <Import Project="..\RobustToolbox\MSBuild\Robust.DefineConstants.targets" />
   <ItemGroup>
-    <PackageReference Include="NUnit" Version="3.13.1" />
-    <PackageReference Include="NUnit3TestAdapter" Version="3.17.0" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="16.9.1" />
+    <PackageReference Include="NUnit" />
+    <PackageReference Include="NUnit3TestAdapter" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\OpenDreamClient\OpenDreamClient.csproj" />
@@ -27,10 +29,21 @@
     <ProjectReference Include="..\RobustToolbox\Robust.UnitTesting\Robust.UnitTesting.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <!-- Copy DMProject to output directory. !-->
-    <None Include="$(ProjectDir)\DMProject\**" CopyToOutputDirectory="PreserveNewest" LinkBase="DMProject\" />
-    <!-- Copy DMStandard to output directory. !-->
-    <None Include="$(SolutionDir)\DMCompiler\DMStandard\**" CopyToOutputDirectory="PreserveNewest" LinkBase="DMStandard\" />
+    <DMProject Include="$(ProjectDir)\DMProject\**" />
+    <DMStandard Include="..\DMCompiler\DMStandard\**" />
   </ItemGroup>
-  <Import Project="..\RobustToolbox\MSBuild\Robust.Analyzers.targets" />
+  <!-- Need to copy DMStandard and DMProject to output directory during AfterBuild and Publish. -->
+  <Target Name="CopyDMProject" AfterTargets="AfterBuild">
+    <Copy SourceFiles="@(DMProject)" DestinationFiles="@(DMProject->'$(OutDir)\DMProject\%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
+  <Target Name="CopyDMProjectOnPublish" AfterTargets="Publish">
+    <Copy SourceFiles="@(DMProject)" DestinationFiles="@(DMProject->'$(PublishDir)\DMProject\%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
+  <Target Name="CopyDMStandard" AfterTargets="AfterBuild">
+    <Copy SourceFiles="@(DMStandard)" DestinationFiles="@(DMStandard->'$(OutDir)\DMStandard\%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
+  <Target Name="CopyDMStandardOnPublish" AfterTargets="Publish">
+    <Copy SourceFiles="@(DMStandard)" DestinationFiles="@(DMStandard->'$(PublishDir)\DMStandard\%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
+  <Import Project="..\RobustToolbox\MSBuild\Robust.Properties.targets" />
 </Project>

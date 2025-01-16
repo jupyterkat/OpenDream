@@ -1,48 +1,34 @@
-﻿using System.Collections.Generic;
-using OpenDreamRuntime.Objects;
+﻿using System.Runtime.CompilerServices;
 
-namespace OpenDreamRuntime.Procs {
-    public struct DreamProcArguments {
-        public List<DreamValue> OrderedArguments;
-        public Dictionary<string, DreamValue> NamedArguments;
+namespace OpenDreamRuntime.Procs;
 
-        public int ArgumentCount => OrderedArguments.Count + NamedArguments.Count;
+public readonly ref struct DreamProcArguments {
+    public int Count => Values.Length;
 
-        public DreamProcArguments(List<DreamValue> orderedArguments, Dictionary<string, DreamValue> namedArguments = null) {
-            OrderedArguments = orderedArguments ?? new List<DreamValue>();
-            NamedArguments = namedArguments ?? new Dictionary<string, DreamValue>();
+    public readonly ReadOnlySpan<DreamValue> Values;
+
+    public DreamProcArguments() {
+        Values = Array.Empty<DreamValue>();
+    }
+
+    public DreamProcArguments(ReadOnlySpan<DreamValue> values) {
+        Values = values;
+    }
+
+    public DreamProcArguments(params DreamValue[] values) {
+        Values = values;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public DreamValue GetArgument(int argumentPosition) {
+        if (Count > argumentPosition) {
+            return Values[argumentPosition];
         }
 
-        public List<DreamValue> GetAllArguments() {
-            List<DreamValue> AllArguments = new List<DreamValue>();
+        return DreamValue.Null;
+    }
 
-            AllArguments.AddRange(OrderedArguments);
-            AllArguments.AddRange(NamedArguments.Values);
-            return AllArguments;
-        }
-
-        public DreamValue GetArgument(int argumentPosition, string argumentName) {
-            if (NamedArguments.TryGetValue(argumentName, out DreamValue argumentValue)) {
-                return argumentValue;
-            }
-            if (OrderedArguments.Count > argumentPosition) {
-                return OrderedArguments[argumentPosition];
-            }
-            return DreamValue.Null;
-        }
-
-        public DreamList CreateDreamList() {
-            DreamList list = DreamList.Create();
-
-            foreach (DreamValue argument in OrderedArguments) {
-                list.AddValue(argument);
-            }
-
-            foreach (KeyValuePair<string, DreamValue> argument in NamedArguments) {
-                list.SetValue(new DreamValue(argument.Key), argument.Value);
-            }
-
-            return list;
-        }
+    public override string ToString() {
+        return $"<Arguments {Count}>";
     }
 }

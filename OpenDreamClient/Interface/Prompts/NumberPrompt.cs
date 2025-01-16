@@ -1,44 +1,32 @@
-﻿using System;
-using OpenDreamShared.Dream.Procs;
-using Robust.Client.UserInterface;
+﻿using OpenDreamShared.Dream;
 using Robust.Client.UserInterface.Controls;
-using Robust.Shared.Log;
 
-namespace OpenDreamClient.Interface.Prompts
-{
-    class NumberPrompt : InputWindow {
-        public NumberPrompt(int promptId, String title, String message, String defaultValue, bool canCancel) : base(promptId, title, message, defaultValue, canCancel) { }
+namespace OpenDreamClient.Interface.Prompts;
 
-        protected override Control CreateInputControl(String defaultValue) {
-            // TODO: text input validation.
-            LineEdit numberInput = new() {
-                Text = defaultValue,
-                VerticalAlignment = VAlignment.Top
-            };
-            //numberInput.PreviewTextInput += NumberInput_PreviewTextInput;
+internal sealed class NumberPrompt : InputWindow {
+    private readonly LineEdit _numberInput;
 
-            return numberInput;
+    public NumberPrompt(string title, string message, string defaultValue, bool canCancel,
+        Action<DreamValueType, object?>? onClose) : base(title, message, canCancel, onClose) {
+        _numberInput = new() {
+            Text = defaultValue,
+            VerticalAlignment = VAlignment.Top,
+            IsValid = static str => float.TryParse(str, out float _),
+        };
+
+        _numberInput.OnTextEntered += NumberInput_TextEntered;
+        SetPromptControl(_numberInput);
+    }
+
+    protected override void OkButtonClicked() {
+        if (!float.TryParse(_numberInput.Text, out float num)) {
+            Logger.GetSawmill("opendream.prompt").Error($"Error while trying to convert {_numberInput.Text} to a number.");
         }
 
-        /*
-        private void NumberInput_PreviewTextInput(object sender, TextCompositionEventArgs e) {
-            //Only allow numbers
-            foreach (char c in e.Text) {
-                if (!char.IsDigit(c)) {
-                    e.Handled = true;
+        FinishPrompt(DreamValueType.Num, num);
+    }
 
-                    return;
-                }
-            }
-        }
-        */
-
-        protected override void OkButtonClicked() {
-            if (!float.TryParse(((LineEdit)_inputControl).Text, out float num)) {
-                Logger.Error("Error while trying to convert " + ((LineEdit)_inputControl).Text + " to a number.");
-            }
-
-            FinishPrompt(DMValueType.Num, num);
-        }
+    private void NumberInput_TextEntered(LineEdit.LineEditEventArgs obj) {
+        ButtonClicked(DefaultButton);
     }
 }
