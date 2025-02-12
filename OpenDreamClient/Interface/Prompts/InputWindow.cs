@@ -1,34 +1,30 @@
-﻿using System;
-using OpenDreamShared.Dream.Procs;
+﻿using OpenDreamShared.Dream;
 using Robust.Client.UserInterface;
 
-namespace OpenDreamClient.Interface.Prompts
-{
-    class InputWindow : PromptWindow {
-        protected Control _inputControl;
+namespace OpenDreamClient.Interface.Prompts;
 
-        public InputWindow(int promptId, String title, String message, String defaultValue, bool canCancel) : base(promptId, title, message) {
-            _inputControl = CreateInputControl(defaultValue);
-            InputControl.AddChild(_inputControl);
+[Virtual]
+internal class InputWindow : PromptWindow {
+    protected InputWindow(string title, string message, bool canCancel,
+        Action<DreamValueType, object?>? onClose) : base(title, message, onClose) {
+        CreateButton("Ok", true);
+        if (canCancel) CreateButton("Cancel", false);
+    }
 
-            CreateButton("Ok", true);
-            if (canCancel) CreateButton("Cancel", false);
+    protected void SetPromptControl(Control promptControl, bool grabKeyboard = true) {
+        InputControl.RemoveAllChildren();
+        InputControl.AddChild(promptControl);
+        if (grabKeyboard) promptControl.GrabKeyboardFocus();
+    }
 
-            _inputControl.GrabKeyboardFocus();
-        }
+    protected override void ButtonClicked(string button) {
+        if (button == "Ok") OkButtonClicked();
+        else FinishPrompt(DreamValueType.Null, null);
 
-        protected virtual Control CreateInputControl(String defaultValue) {
-            return new Control();
-        }
+        base.ButtonClicked(button);
+    }
 
-        protected override void ButtonClicked(string button) {
-            if (button == "Ok") OkButtonClicked();
-            else FinishPrompt(DMValueType.Null, null);
-
-            base.ButtonClicked(button);
-        }
-
-        protected virtual void OkButtonClicked() {
-            throw new NotImplementedException();
-        }
-    }}
+    protected virtual void OkButtonClicked() {
+        throw new NotImplementedException();
+    }
+}

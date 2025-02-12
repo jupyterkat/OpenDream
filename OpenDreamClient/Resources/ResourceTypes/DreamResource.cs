@@ -1,13 +1,26 @@
-﻿namespace OpenDreamClient.Resources.ResourceTypes
-{
-    public abstract class DreamResource
-    {
-        public string ResourcePath;
-        public byte[] Data;
+﻿using System.IO;
+using JetBrains.Annotations;
 
-        protected DreamResource(string resourcePath, byte[] data) {
-            ResourcePath = resourcePath;
-            Data = data;
-        }
+namespace OpenDreamClient.Resources.ResourceTypes;
+
+[Virtual]
+public class DreamResource {
+    public readonly int Id;
+    public List<Action> OnUpdateCallbacks = new();
+
+    protected byte[] Data;
+
+    [UsedImplicitly]
+    public DreamResource(int id, byte[] data) {
+        Id = id;
+        Data = data;
+    }
+
+    public void WriteTo(Stream stream) {
+        stream.Write(Data);
+    }
+
+    public virtual void UpdateData(byte[] data) {
+        Data = data;
     }
 }

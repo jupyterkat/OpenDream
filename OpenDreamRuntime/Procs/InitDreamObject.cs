@@ -1,11 +1,14 @@
-using System;
 using System.Text;
 using OpenDreamRuntime.Objects;
 
 namespace OpenDreamRuntime.Procs {
-    class InitDreamObjectState : ProcState
-    {
-        enum Stage {
+    internal sealed class InitDreamObjectState : ProcState {
+        public static readonly Stack<InitDreamObjectState> Pool = new();
+
+        private readonly DreamManager _dreamMan;
+        private readonly DreamObjectTree _objectTree;
+
+        private enum Stage {
             // Need to call the object's (init) proc
             Init,
 
@@ -16,28 +19,44 @@ namespace OpenDreamRuntime.Procs {
             Return,
         }
 
-        public InitDreamObjectState(DreamThread thread, DreamObject dreamObject, DreamObject usr, DreamProcArguments arguments)
-            : base(thread)
-        {
+        public InitDreamObjectState(DreamManager dreamManager, DreamObjectTree objectTree) {
+            _dreamMan = dreamManager;
+            _objectTree = objectTree;
+        }
+
+        public void Initialize(DreamThread thread, DreamObject dreamObject, DreamObject? usr, DreamProcArguments arguments) {
+            base.Initialize(thread, true);
+
             _dreamObject = dreamObject;
             _usr = usr;
-            _arguments = arguments;
+            arguments.Values.CopyTo(_arguments);
+            _argumentCount = arguments.Count;
+            _stage = Stage.Init;
         }
 
         private DreamObject _dreamObject;
-        private DreamObject _usr;
-        private DreamProcArguments _arguments;
+        private DreamObject? _usr;
+        private readonly DreamValue[] _arguments = new DreamValue[256];
+        private int _argumentCount;
         private Stage _stage = Stage.Init;
 
-        public override DreamProc Proc => null;
+        public override DreamProc? Proc => null;
 
-        public override void AppendStackFrame(StringBuilder builder)
-        {
-            builder.AppendLine($"<InitDreamObject {_dreamObject}>");
+        public override void AppendStackFrame(StringBuilder builder) {
+            builder.AppendLine($"new {_dreamObject.ObjectDefinition.Type}");
         }
 
-        protected override ProcStatus InternalResume()
-        {
+        public override void Dispose() {
+            base.Dispose();
+
+            _dreamObject = null!;
+            _usr = null;
+            _argumentCount = 0;
+
+            Pool.Push(this);
+        }
+
+        public override ProcStatus Resume() {
             var src = _dreamObject;
 
             switch_start:
@@ -45,11 +64,12 @@ namespace OpenDreamRuntime.Procs {
                 case Stage.Init: {
                     _stage = Stage.OnObjectCreated;
 
-                    if (src.ObjectDefinition.InitializionProc == null) {
+                    if (src.ObjectDefinition.InitializationProc == null || _objectTree.Procs[src.ObjectDefinition.InitializationProc.Value] is DMProc { IsNullProc: true }) {
                         goto switch_start;
                     }
 
-                    var initProcState = src.ObjectDefinition.InitializionProc.CreateState(Thread, src, _usr, _arguments);
+                    var proc = _objectTree.Procs[src.ObjectDefinition.InitializationProc.Value];
+                    var initProcState = proc.CreateState(Thread, src, _usr, new());
                     Thread.PushProcState(initProcState);
                     return ProcStatus.Called;
                 }
@@ -57,15 +77,19 @@ namespace OpenDreamRuntime.Procs {
                 case Stage.OnObjectCreated: {
                     _stage = Stage.Return;
 
-                    if (src.ObjectDefinition.MetaObject == null) {
+                    _dreamObject.Initialize(new DreamProcArguments(_arguments.AsSpan(0, _argumentCount)));
+
+                    if (!_dreamMan.Initialized) {
+                        // Suppress all New() calls during /world/<init>() and map loading.
                         goto switch_start;
                     }
 
-                    _dreamObject.ObjectDefinition.MetaObject.OnObjectCreated(_dreamObject, _arguments);
-
-                    if (src.ObjectDefinition.MetaObject.ShouldCallNew) {
+                    if (src.ShouldCallNew) {
                         var newProc = src.GetProc("New");
-                        var newProcState = newProc.CreateState(Thread, src, _usr, _arguments);
+                        if (newProc is DMProc { IsNullProc: true})
+                            goto switch_start;
+
+                        var newProcState = newProc.CreateState(Thread, src, _usr, new DreamProcArguments(_arguments.AsSpan(0, _argumentCount)));
                         Thread.PushProcState(newProcState);
                         return ProcStatus.Called;
                     }

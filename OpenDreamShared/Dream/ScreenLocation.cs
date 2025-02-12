@@ -1,101 +1,270 @@
-﻿using Robust.Shared.Maths;
-using Robust.Shared.Serialization;
+﻿using Robust.Shared.Serialization;
 using System;
+using System.Numerics;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
+using System.Text;
+using Robust.Shared.Log;
+using Robust.Shared.Maths;
 
-namespace OpenDreamShared.Dream {
-    [Serializable, NetSerializable]
-    public class ScreenLocation {
-        public int X, Y;
-        public int PixelOffsetX, PixelOffsetY;
-        public ScreenLocation Range;
-        public int RepeatX { get => (Range?.X - X + 1) ?? 1; }
-        public int RepeatY { get => (Range?.Y - Y + 1) ?? 1; }
+namespace OpenDreamShared.Dream;
 
-        public ScreenLocation(int x, int y, int pixelOffsetX, int pixelOffsetY, ScreenLocation range = null) {
-            X = x;
-            Y = y;
-            PixelOffsetX = pixelOffsetX;
-            PixelOffsetY = pixelOffsetY;
-            Range = range;
+public enum HorizontalAnchor {
+    West,
+    Left,
+    Center,
+    East,
+    Right
+}
+
+public enum VerticalAnchor {
+    South,
+    Bottom,
+    Center,
+    North,
+    Top
+}
+
+[Serializable, NetSerializable]
+public sealed class ScreenLocation {
+    public string? MapControl;
+    public HorizontalAnchor HorizontalAnchor;
+    public VerticalAnchor VerticalAnchor;
+    public int X, Y;
+    public int PixelOffsetX, PixelOffsetY;
+    public ScreenLocation? Range;
+
+    public int RepeatX => Range?.X - X + 1 ?? 1;
+    public int RepeatY => Range?.Y - Y + 1 ?? 1;
+
+    private static ISawmill Sawmill => Logger.GetSawmill("opendream.screen_loc_parser");
+
+    private static string[] _keywords = [
+        "CENTER",
+        "WEST", "EAST", "LEFT", "RIGHT",
+        "NORTH", "SOUTH", "TOP", "BOTTOM",
+        "TOPLEFT", "TOPRIGHT",
+        "BOTTOMLEFT", "BOTTOMRIGHT"
+    ];
+
+    public ScreenLocation(int x, int y, int pixelOffsetX, int pixelOffsetY, ScreenLocation? range = null) {
+        X = x - 1;
+        Y = y - 1;
+        PixelOffsetX = pixelOffsetX;
+        PixelOffsetY = pixelOffsetY;
+        Range = range;
+    }
+
+    public ScreenLocation(int x, int y, int iconSize) {
+        X = x / iconSize;
+        Y = y / iconSize;
+
+        PixelOffsetX = x % iconSize;
+        PixelOffsetY = y % iconSize;
+        Range = null;
+    }
+
+    public ScreenLocation(string screenLocation) {
+        screenLocation = screenLocation.ToUpper(CultureInfo.InvariantCulture);
+
+        ParseScreenLoc(screenLocation);
+    }
+
+    public Vector2 GetViewPosition(Vector2 viewOffset, ViewRange view, float tileSize, Vector2i iconSize) {
+        // TODO: LEFT/RIGHT/TOP/BOTTOM need to stick to the edge of the visible map if the map's container is smaller than the map itself
+        
+        float x = (X + PixelOffsetX / tileSize);
+        x += HorizontalAnchor switch {
+            HorizontalAnchor.West or HorizontalAnchor.Left => 0,
+            HorizontalAnchor.Center => view.CenterX,
+            HorizontalAnchor.East => view.Width - 1,
+            HorizontalAnchor.Right => view.Width - (iconSize.X / tileSize),
+            _ => throw new Exception($"Invalid horizontal anchor {HorizontalAnchor}")
+        };
+
+        float y = (Y + PixelOffsetY / tileSize);
+        y += VerticalAnchor switch {
+            VerticalAnchor.South or VerticalAnchor.Bottom => 0,
+            VerticalAnchor.Center => view.CenterY,
+            VerticalAnchor.North => view.Height - 1,
+            VerticalAnchor.Top => view.Height - (iconSize.Y / tileSize),
+            _ => throw new Exception($"Invalid vertical anchor {VerticalAnchor}")
+        };
+
+        return viewOffset + new Vector2(x, y);
+    }
+
+    public override string ToString() {
+        string mapControl = MapControl != null ? $"{MapControl}:" : string.Empty;
+        string range = Range != null ? $" to {Range}" : string.Empty;
+
+        return $"{mapControl}{HorizontalAnchor}+{X+1}:{PixelOffsetX},{VerticalAnchor}+{Y+1}:{PixelOffsetY}{range}";
+    }
+
+    public string ToCoordinates() {
+        return $"{X+1}:{PixelOffsetX},{Y+1}:{PixelOffsetY}";
+    }
+
+    private void ParseScreenLoc(string screenLoc) {
+        string[] rangeSplit = screenLoc.Split(" TO ");
+        Range = rangeSplit.Length > 1 ? new ScreenLocation(rangeSplit[1]) : null;
+
+        string[] coordinateSplit = rangeSplit[0].Split(",");
+        if (coordinateSplit.Length is not 1 and not 2)
+            throw new Exception($"Invalid screen_loc \"{screenLoc}\"");
+
+        int mapControlSplitIndex = coordinateSplit[0].IndexOf(':');
+        if (mapControlSplitIndex > 0) {
+            string mapControl = rangeSplit[0].Substring(0, mapControlSplitIndex);
+
+            if (char.IsAsciiLetter(mapControl[0]) && mapControl.IndexOfAny(['+', '-']) == -1 && !_keywords.Contains(mapControl)) {
+                MapControl = mapControl;
+                coordinateSplit[0] = coordinateSplit[0].Substring(mapControlSplitIndex + 1);
+            }
         }
 
-        public ScreenLocation(int x, int y, int iconSize) {
-            X = x / iconSize + 1;
-            Y = y / iconSize + 1;
+        if (coordinateSplit.Length == 1) {
+            X = 0;
+            Y = 0;
 
-            PixelOffsetX = x % iconSize;
-            PixelOffsetY = y % iconSize;
-            Range = null;
+            (HorizontalAnchor, VerticalAnchor) = coordinateSplit[0].Trim() switch {
+                "CENTER" => (HorizontalAnchor.Center, VerticalAnchor.Center),
+                "NORTHWEST" => (HorizontalAnchor.West, VerticalAnchor.North),
+                "TOPLEFT" => (HorizontalAnchor.Left, VerticalAnchor.Top),
+                "NORTHEAST" => (HorizontalAnchor.East, VerticalAnchor.North),
+                "TOPRIGHT" => (HorizontalAnchor.Right, VerticalAnchor.Top),
+                "SOUTHWEST" => (HorizontalAnchor.West, VerticalAnchor.South),
+                "BOTTOMLEFT" => (HorizontalAnchor.Left, VerticalAnchor.Bottom),
+                "SOUTHEAST" => (HorizontalAnchor.East, VerticalAnchor.South),
+                "BOTTOMRIGHT" => (HorizontalAnchor.Right, VerticalAnchor.Bottom),
+                _ => throw new Exception($"Invalid screen_loc {screenLoc}")
+            };
+
+            return;
         }
 
-        public ScreenLocation(string screenLocation) {
-            string[] rangeSplit = screenLocation.Split(" to ");
-            if (rangeSplit.Length > 1) Range = new ScreenLocation(rangeSplit[1]);
-            else Range = null;
+        bool swappedAxis = ParseScreenLocCoordinate(coordinateSplit[0], true);
+        ParseScreenLocCoordinate(coordinateSplit[1], swappedAxis);
+    }
 
-            string[] coordinateSplit = rangeSplit[0].Split(",");
-            if (coordinateSplit.Length != 2) throw new Exception("Invalid screen_loc");
-            (X, PixelOffsetX) = ParseScreenLocCoordinate(coordinateSplit[0]);
-            (Y, PixelOffsetY) = ParseScreenLocCoordinate(coordinateSplit[1]);
-        }
+    /// <summary>
+    /// Parse a string value on either side of the comma in a screen_loc
+    /// </summary>
+    /// <returns>Whether this set a value on an axis that doesn't match the isHorizontal arg</returns>
+    private bool ParseScreenLocCoordinate(string coordinate, bool isHorizontal) {
+        List<string> pieces = new();
+        StringBuilder currentPiece = new();
 
-        public Vector2 GetViewPosition(Vector2 viewOffset, float iconSize) {
-            return viewOffset + ((X - 1) + (PixelOffsetX / iconSize), (Y - 1) + (PixelOffsetY / iconSize));
-        }
-
-        public override string ToString() {
-            return X + ":" + PixelOffsetX + "," + Y + ":" + PixelOffsetY;
-        }
-
-        private static (int Coordinate, int PixelOffset) ParseScreenLocCoordinate(string coordinate) {
-            coordinate = coordinate.Trim();
-            if (coordinate == String.Empty) throw new Exception("Invalid screen_loc coordinate");
-            coordinate = coordinate.Replace("SOUTH", "1");
-            coordinate = coordinate.Replace("WEST", "1");
-            coordinate = coordinate.Replace("NORTH", "15");
-            coordinate = coordinate.Replace("EAST", "15");
-            coordinate = coordinate.Replace("CENTER", "8");
-
-            List<(string Operation, float Number, int PixelOffset)> operations = new();
-            string currentOperation = null;
-            string currentNumber = String.Empty;
-            int i = 0;
-            do {
-                char c = (i < coordinate.Length) ? coordinate[i] : '\0';
-                i++;
-
-                if ((c >= '0' && c <= '9') || (currentNumber != String.Empty && (c == '.' || c == ':')) || ((currentNumber == String.Empty || currentNumber.EndsWith(":")) && c == '-')) {
-                    currentNumber += c;
-                } else {
-                    if (currentNumber == String.Empty) throw new Exception("Expected a number in screen_loc");
-
-                    string[] numberSplit = currentNumber.Split(":");
-                    if (numberSplit.Length > 2) throw new Exception("Invalid number in screen_loc");
-
-                    operations.Add((currentOperation, float.Parse(numberSplit[0], CultureInfo.InvariantCulture), (numberSplit.Length == 2) ? int.Parse(numberSplit[1]) : 0));
-                    currentOperation = c.ToString();
-                    currentNumber = String.Empty;
-                }
-            } while (i <= coordinate.Length);
-
-            float coordinateResult = 0.0f;
-            int pixelOffsetResult = 0;
-            foreach ((string Operation, float Number, int PixelOffset) operation in operations) {
-                pixelOffsetResult += operation.PixelOffset;
-
-                switch (operation.Operation) {
-                    case null: coordinateResult = operation.Number; break;
-                    case "+": coordinateResult += operation.Number; break;
-                    case "-": coordinateResult -= operation.Number; break;
-                    default: throw new Exception("Invalid operation '" + operation.Operation + "' in screen_loc");
-                }
+        foreach (var c in coordinate) {
+            switch (c) {
+                case ' ' or '\t':
+                    continue;
+                case '-' or '+' when (currentPiece.Length == 0 || currentPiece[^1] != ':'):
+                    // Start a new piece
+                    pieces.Add(currentPiece.ToString());
+                    currentPiece.Clear();
+                    break;
             }
 
-            double fractionalOffset = coordinateResult - Math.Floor(coordinateResult);
-            pixelOffsetResult += (int)(32 * fractionalOffset);
-            return ((int)coordinateResult, pixelOffsetResult);
+            currentPiece.Append(c);
         }
+
+        pieces.Add(currentPiece.ToString());
+
+        bool settingHorizontal = isHorizontal;
+        bool isFirstNumber = true;
+        float coordinateResult = 0.0f;
+        int pixelOffsetResult = 0;
+        foreach (string piece in pieces) {
+            if (string.IsNullOrEmpty(piece))
+                continue;
+
+            string offsetStr;
+
+            int pixelOffsetSeparator = piece.IndexOf(':');
+            if (pixelOffsetSeparator != -1) {
+                offsetStr = piece.Substring(0, pixelOffsetSeparator);
+                string pixelOffsetStr = piece.Substring(pixelOffsetSeparator + 1);
+
+                if (!int.TryParse(pixelOffsetStr, out var pixelOffset))
+                    Sawmill.Error($"Invalid pixel offset {pixelOffsetStr} in {coordinate}");
+
+                pixelOffsetResult += pixelOffset;
+            } else {
+                offsetStr = piece;
+            }
+
+            switch (offsetStr) {
+                case "CENTER":
+                    if (settingHorizontal)
+                        HorizontalAnchor = HorizontalAnchor.Center;
+                    else
+                        VerticalAnchor = VerticalAnchor.Center;
+
+                    break;
+                case "WEST":
+                    // Yes, this sets the horizontal anchor regardless of the isHorizontal arg.
+                    // Every macro sets their respective axis regardless of which coordinate it's in
+                    HorizontalAnchor = HorizontalAnchor.West;
+                    settingHorizontal = true;
+                    break;
+                case "EAST":
+                    HorizontalAnchor = HorizontalAnchor.East;
+                    settingHorizontal = true;
+                    break;
+                case "NORTH":
+                    VerticalAnchor = VerticalAnchor.North;
+                    settingHorizontal = false;
+                    break;
+                case "SOUTH":
+                    VerticalAnchor = VerticalAnchor.South;
+                    settingHorizontal = false;
+                    break;
+                case "LEFT":
+                    HorizontalAnchor = HorizontalAnchor.Left;
+                    settingHorizontal = true;
+                    break;
+                case "RIGHT":
+                    HorizontalAnchor = HorizontalAnchor.Right;
+                    settingHorizontal = true;
+                    break;
+                case "TOP":
+                    VerticalAnchor = VerticalAnchor.Top;
+                    settingHorizontal = false;
+                    break;
+                case "BOTTOM":
+                    VerticalAnchor = VerticalAnchor.Bottom;
+                    settingHorizontal = false;
+                    break;
+
+                // A normal number
+                default:
+                    if (!float.TryParse(offsetStr, out var offset))
+                        Sawmill.Error($"Invalid offset {offsetStr} in {coordinate}");
+
+                    coordinateResult += offset;
+                    if (isFirstNumber) // Deal with us being 0-indexed while screen_loc is 1-indexed
+                        coordinateResult -= 1.0f;
+
+                    break;
+            }
+
+            isFirstNumber = false;
+        }
+
+        // Convert decimal numbers to a pixel offset
+        double fractionalOffset = coordinateResult - Math.Floor(coordinateResult);
+        pixelOffsetResult += (int)(32 * fractionalOffset);
+
+        if (settingHorizontal) {
+            X = (int)coordinateResult;
+            PixelOffsetX = pixelOffsetResult;
+        } else {
+            Y = (int)coordinateResult;
+            PixelOffsetY = pixelOffsetResult;
+        }
+
+        return settingHorizontal != isHorizontal;
     }
 }

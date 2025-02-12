@@ -1,16 +1,29 @@
 ﻿using OpenDreamRuntime.Input;
+using OpenDreamRuntime.Objects.Types;
+using OpenDreamRuntime.Procs.DebugAdapter;
+using OpenDreamShared;
+using Robust.Server.ServerStatus;
 using Robust.Shared;
 using Robust.Shared.Configuration;
 using Robust.Shared.ContentPack;
-using Robust.Shared.GameObjects;
-using Robust.Shared.IoC;
 using Robust.Shared.Timing;
+using Robust.Shared.Prototypes;
+using Robust.Shared.Utility;
+using System.IO;
+using System.Linq;
+
+[module: System.Runtime.CompilerServices.SkipLocalsInit]
 
 namespace OpenDreamRuntime {
-    public class EntryPoint : GameServer {
-        [Dependency]
-        private IDreamManager _dreamManager;
-        private DreamCommandSystem _commandSystem;
+    public sealed class EntryPoint : GameServer {
+        [Dependency] private readonly IEntitySystemManager _entitySystemManager = default!;
+        [Dependency] private readonly DreamManager _dreamManager = default!;
+        [Dependency] private readonly IConfigurationManager _configManager = default!;
+        [Dependency] private readonly IPrototypeManager _prototypeManager = default!;
+        [Dependency] private readonly IDreamDebugManager _debugManager = default!;
+        [Dependency] private readonly ServerInfoManager _serverInfoManager = default!;
+
+        private DreamCommandSystem? _commandSystem;
 
         public override void Init() {
             IComponentFactory componentFactory = IoCManager.Resolve<IComponentFactory>();
@@ -19,8 +32,7 @@ namespace OpenDreamRuntime {
             ServerContentIoC.Register();
 
             // This needs to happen after all IoC registrations, but before IoC.BuildGraph();
-            foreach (var callback in TestingCallbacks)
-            {
+            foreach (var callback in TestingCallbacks) {
                 var cast = (ServerModuleTestingCallbacks) callback;
                 cast.ServerBeforeIoC?.Invoke();
             }
@@ -29,25 +41,54 @@ namespace OpenDreamRuntime {
             IoCManager.InjectDependencies(this);
             componentFactory.GenerateNetIds();
 
-            // Disable since disabling prediction causes timing errors otherwise.
-            var cfg = IoCManager.Resolve<IConfigurationManager>();
-            cfg.SetCVar(CVars.NetLogLateMsg, false);
+            _configManager.OverrideDefault(CVars.NetLogLateMsg, false); // Disable since disabling prediction causes timing errors otherwise.
+            _configManager.OverrideDefault(CVars.GameAutoPauseEmpty, false); // DreamObjectWorld sets this appropriately but we need to keep it disabled til then or it won't be reached
+            _configManager.OverrideDefault(CVars.DiscordRichPresenceSecondIconId, "opendream");
+            _configManager.SetCVar(CVars.GridSplitting, false); // Grid splitting should never be used
+            if(String.IsNullOrEmpty(_configManager.GetCVar<string>(OpenDreamCVars.JsonPath))) //if you haven't set the jsonpath cvar, set it to the first valid file path passed as an arg
+                foreach (string arg in Environment.GetCommandLineArgs().Skip(1)) //skip the first element, because it's just the server's exe path
+                    if(File.Exists(arg)){
+                        _configManager.SetCVar(OpenDreamCVars.JsonPath, arg);
+                        break;
+                    }
+
+            _prototypeManager.LoadDirectory(new ResPath("/Resources/Prototypes"));
+
+            _serverInfoManager.Initialize();
         }
 
         public override void PostInit() {
-            _commandSystem = EntitySystem.Get<DreamCommandSystem>();
-            _dreamManager.Initialize();
+            _commandSystem = _entitySystemManager.GetEntitySystem<DreamCommandSystem>();
+
+            int debugAdapterPort = _configManager.GetCVar(OpenDreamCVars.DebugAdapterLaunched);
+            if (debugAdapterPort == 0) {
+                _dreamManager.PreInitialize(_configManager.GetCVar<string>(OpenDreamCVars.JsonPath));
+                _dreamManager.StartWorld();
+            } else {
+                // The debug manager is responsible for running _dreamManager.PreInitialize() and .StartWorld()
+                _debugManager.Initialize(debugAdapterPort);
+            }
         }
 
         protected override void Dispose(bool disposing) {
+            // Write every savefile to disk
+            foreach (var savefile in DreamObjectSavefile.Savefiles.ToArray()) { //ToArray() to avoid modifying the collection while iterating over it
+                try {
+                    savefile.Close();
+                } catch (Exception e) {
+                    Logger.GetSawmill("opendream").Error($"Exception while flushing savefile '{savefile.Resource.ResourcePath}', data has been lost. {e}");
+                }
+            }
+
             _dreamManager.Shutdown();
+            _debugManager.Shutdown();
         }
 
         public override void Update(ModUpdateLevel level, FrameEventArgs frameEventArgs) {
-            if (level == ModUpdateLevel.PreEngine)
-            {
-                _commandSystem.RunRepeatingCommands();
+            if (level == ModUpdateLevel.PostEngine) {
+                _commandSystem!.RunRepeatingCommands();
                 _dreamManager.Update();
+                _debugManager.Update();
             }
         }
     }

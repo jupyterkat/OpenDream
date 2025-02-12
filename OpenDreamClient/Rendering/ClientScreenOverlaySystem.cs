@@ -1,39 +1,28 @@
 ﻿using OpenDreamShared.Rendering;
-using Robust.Shared.GameObjects;
-using Robust.Shared.IoC;
-using System.Collections.Generic;
 
-namespace OpenDreamClient.Rendering {
-    class ClientScreenOverlaySystem : SharedScreenOverlaySystem {
-        public HashSet<EntityUid> ScreenObjects = new();
+namespace OpenDreamClient.Rendering;
 
-        [Dependency] private IEntityManager _entityManager = default!;
+internal sealed class ClientScreenOverlaySystem : SharedScreenOverlaySystem {
+    public HashSet<EntityUid> ScreenObjects = new();
 
-        public override void Initialize() {
-            SubscribeNetworkEvent<AddScreenObjectEvent>(OnAddScreenObject);
-            SubscribeNetworkEvent<RemoveScreenObjectEvent>(OnRemoveScreenObject);
-        }
+    [Dependency] private readonly IEntityManager _entityManager = default!;
 
-        public override void Shutdown() {
-            ScreenObjects.Clear();
-        }
+    public override void Initialize() {
+        SubscribeNetworkEvent<AddScreenObjectEvent>(OnAddScreenObject);
+        SubscribeNetworkEvent<RemoveScreenObjectEvent>(OnRemoveScreenObject);
+    }
 
-        public IEnumerable<DMISpriteComponent> EnumerateScreenObjects() {
-            foreach (EntityUid uid in ScreenObjects) {
-                if (_entityManager.TryGetComponent(uid, out DMISpriteComponent sprite)) {
-                    if (sprite.ScreenLocation == null) continue;
+    public override void Shutdown() {
+        ScreenObjects.Clear();
+    }
 
-                    yield return sprite;
-                }
-            }
-        }
+    private void OnAddScreenObject(AddScreenObjectEvent e) {
+        EntityUid ent = _entityManager.GetEntity(e.ScreenObject);
+        ScreenObjects.Add(ent);
+    }
 
-        private void OnAddScreenObject(AddScreenObjectEvent e) {
-            ScreenObjects.Add(e.ScreenObject);
-        }
-
-        private void OnRemoveScreenObject(RemoveScreenObjectEvent e) {
-            ScreenObjects.Remove(e.ScreenObject);
-        }
+    private void OnRemoveScreenObject(RemoveScreenObjectEvent e) {
+        EntityUid ent = _entityManager.GetEntity(e.ScreenObject);
+        ScreenObjects.Remove(ent);
     }
 }

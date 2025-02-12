@@ -1,68 +1,63 @@
-﻿using System;
-using OpenDreamShared.Interface;
+﻿using System.Diagnostics.CodeAnalysis;
+using OpenDreamClient.Interface.Controls.UI;
+using OpenDreamClient.Interface.Descriptors;
+using OpenDreamClient.Interface.DMF;
+using Robust.Client.ResourceManagement;
 using Robust.Client.UserInterface;
-using Robust.Client.UserInterface.Controls;
-using Robust.Shared.IoC;
 
-namespace OpenDreamClient.Interface.Controls {
-    class ControlChild : InterfaceControl
-    {
-        // todo: robust needs GridSplitter.
-        // and a non-shit grid control.
+namespace OpenDreamClient.Interface.Controls;
 
-        [Dependency] private readonly IDreamInterfaceManager _dreamInterface = default!;
+internal sealed class ControlChild(ControlDescriptor controlDescriptor, ControlWindow window) : InterfaceControl(controlDescriptor, window) {
+    private ControlDescriptorChild ChildDescriptor => (ControlDescriptorChild)ElementDescriptor;
 
-        private SplitContainer _grid;
-        private ControlWindow _leftElement, _rightElement;
+    private Splitter _splitter;
 
-        public ControlChild(ControlDescriptor controlDescriptor, ControlWindow window) : base(controlDescriptor, window)
-        {
-        }
+    protected override Control CreateUIElement() {
+        _splitter = new Splitter();
 
-        protected override Control CreateUIElement() {
-            _grid = new SplitContainer();
+        return _splitter;
+    }
 
-            return _grid;
-        }
+    protected override void UpdateElementDescriptor() {
+        base.UpdateElementDescriptor();
 
-        public override void UpdateElementDescriptor() {
-            base.UpdateElementDescriptor();
+        var newLeftElement = _interfaceManager.Windows.TryGetValue(ChildDescriptor.Left.Value, out var leftWindow)
+            ? leftWindow.UIElement
+            : null;
+        var newRightElement = _interfaceManager.Windows.TryGetValue(ChildDescriptor.Right.Value, out var rightWindow)
+            ? rightWindow.UIElement
+            : null;
 
-            ControlDescriptorChild controlDescriptor = (ControlDescriptorChild)ElementDescriptor;
+        _splitter.Left = newLeftElement;
+        _splitter.Right = newRightElement;
+        _splitter.Vertical = ChildDescriptor.IsVert.Value;
+        _splitter.SplitterPercentage = ChildDescriptor.Splitter.Value / 100f;
+        _splitter.DragStyleBoxOverride = new StyleBoxColoredTexture {
+            BackgroundColor = (ChildDescriptor.BackgroundColor.Value != Color.Transparent)
+                ? ChildDescriptor.BackgroundColor.Value
+                : DreamStylesheet.DefaultBackgroundColor,
+            Texture = IoCManager.Resolve<IResourceCache>().GetResource<TextureResource>("/Textures/Interface/SplitterBorder.png"),
+            PatchMarginTop = 1,
+            PatchMarginLeft = 1,
+            PatchMarginRight = 1,
+            PatchMarginBottom = 1
+        };
+    }
 
-            _grid.Children.Remove(_leftElement?.UIElement);
-            _grid.Children.Remove(_rightElement?.UIElement);
+    public override void Shutdown() {
+        if (_interfaceManager.Windows.TryGetValue(ChildDescriptor.Left.Value, out var left))
+            left.Shutdown();
+        if (_interfaceManager.Windows.TryGetValue(ChildDescriptor.Right.Value, out var right))
+            right.Shutdown();
+    }
 
-            if (!String.IsNullOrEmpty(controlDescriptor.Left)) {
-                _leftElement = _dreamInterface.Windows[controlDescriptor.Left];
-                _leftElement.UIElement.HorizontalExpand = true;
-                _leftElement.UIElement.VerticalExpand = true;
-                _grid.Children.Add(_leftElement.UIElement);
-            } else {
-                _leftElement = null;
-            }
-
-            if (!String.IsNullOrEmpty(controlDescriptor.Right)) {
-                _rightElement = _dreamInterface.Windows[controlDescriptor.Right];
-                _rightElement.UIElement.HorizontalExpand = true;
-                _rightElement.UIElement.VerticalExpand = true;
-                _grid.Children.Add(_rightElement.UIElement);
-            } else {
-                _rightElement = null;
-            }
-
-            UpdateGrid(controlDescriptor.IsVert);
-        }
-
-        public override void Shutdown() {
-            _leftElement?.Shutdown();
-            _rightElement?.Shutdown();
-        }
-
-        private void UpdateGrid(bool isVert) {
-            _grid.Orientation = isVert
-                ? SplitContainer.SplitOrientation.Horizontal
-                : SplitContainer.SplitOrientation.Vertical;
+    public override bool TryGetProperty(string property, [NotNullWhen(true)] out IDMFProperty? value) {
+        switch (property) {
+            case "splitter":
+                value = new DMFPropertyNum(_splitter.SplitterPercentage * 100);
+                return true;
+            default:
+                return base.TryGetProperty(property, out value);
         }
     }
 }
