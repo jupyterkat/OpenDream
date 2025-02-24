@@ -1,17 +1,29 @@
-﻿using OpenDreamRuntime.Resources;
-using Robust.Shared.IoC;
+﻿using OpenDreamRuntime.Map;
+using OpenDreamRuntime.Objects;
+using OpenDreamRuntime.Procs;
+using OpenDreamRuntime.Procs.DebugAdapter;
+using OpenDreamRuntime.Resources;
 
-namespace OpenDreamRuntime {
-    internal static class ServerContentIoC {
-        public static void Register() {
-            IoCManager.Register<IDreamManager, DreamManager>();
-            IoCManager.Register<IAtomManager, AtomManager>();
+namespace OpenDreamRuntime;
+
+public static class ServerContentIoC {
+    public static void Register(bool unitTests = false) {
+        IoCManager.Register<DreamManager>();
+        IoCManager.Register<DreamObjectTree>();
+        IoCManager.Register<AtomManager>();
+        IoCManager.Register<ProcScheduler>();
+        IoCManager.Register<DreamResourceManager>();
+        IoCManager.Register<WalkManager, WalkManager>();
+        IoCManager.Register<IDreamDebugManager, DreamDebugManager>();
+        IoCManager.Register<ServerInfoManager>();
+
+#if DEBUG
+        IoCManager.Register<LocalHostConGroup>();
+#endif
+
+        if (!unitTests) {
+            // Unit tests use their own version
             IoCManager.Register<IDreamMapManager, DreamMapManager>();
-            IoCManager.Register<DreamResourceManager, DreamResourceManager>();
-
-            #if DEBUG
-            IoCManager.Register<LocalHostConGroup>();
-            #endif
         }
     }
 }

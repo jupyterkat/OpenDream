@@ -1,6 +1,9 @@
 ﻿#define TRUE 1
 #define FALSE 0
 
+#define OPENDREAM 1
+#define OPENDREAM_TOPIC_PORT_EXISTS 1 // Remove this if world.opendream_topic_port is ever removed
+
 #define NORTH 1
 #define SOUTH 2
 #define EAST 4
@@ -18,7 +21,8 @@
 #define OBJ_LAYER 3
 #define MOB_LAYER 4
 #define FLY_LAYER 5
-#define EFFECTS_LAYER 19999
+#define EFFECTS_LAYER 5000
+#define TOPDOWN_LAYER 10000
 #define BACKGROUND_LAYER 20000
 
 #define FLOAT_PLANE -32767
@@ -28,12 +32,27 @@
 #define NEUTER "neuter"
 #define PLURAL "plural"
 
+//animate() flags arg
 #define ANIMATION_END_NOW 1
 #define ANIMATION_LINEAR_TRANSFORM 2
 #define ANIMATION_PARALLEL 4
+#define ANIMATION_SLICE 8
+#define ANIMATION_RELATIVE 256
+#define ANIMATION_CONTINUE 512
+
+//animate() easing arg
+#define LINEAR_EASING	0
+#define SINE_EASING		1
+#define CIRCULAR_EASING	2
+#define CUBIC_EASING	3
+#define BOUNCE_EASING	4
+#define ELASTIC_EASING	5
+#define BACK_EASING		6
+#define QUAD_EASING		7
+#define JUMP_EASING		8
+//flags applied to the animate() easing arg
 #define EASE_IN 64
 #define EASE_OUT 128
-#define ANIMATION_RELATIVE 256
 
 #define NO_STEPS 0
 #define FORWARD_STEPS 1
@@ -41,8 +60,8 @@
 #define SYNC_STEPS 3
 
 //world.system_type
-#define UNIX 0
-#define MS_WINDOWS 1
+#define UNIX "UNIX"
+#define MS_WINDOWS "MS_WINDOWS"
 
 //Icon blending functions
 #define ICON_ADD 0
@@ -54,24 +73,23 @@
 #define ICON_UNDERLAY 6
 
 //mob.sight
-#define SEE_INFRA		(1<<0) // can see infra-red objects
-#define SEE_SELF		(1<<1) // can see self, no matter what
+#define SEE_INFRA		(1<<6)     // can see infra-red objects
+#define SEE_SELF		(1<<5) // can see self, no matter what
 #define SEE_MOBS		(1<<2) // can see all mobs, no matter what
+#define SEEMOBS			(1<<2) // undocumented, identical to SEE_MOBS
 #define SEE_OBJS		(1<<3) // can see all objs, no matter what
+#define SEEOBJS			(1<<3) // undocumented, identical to SEE_OBJS
 #define SEE_TURFS		(1<<4) // can see all turfs (and areas), no matter what
-#define SEE_PIXEL		(1<<5) // if an object is located on an unlit area, but some of its pixels are in a lit area (via pixel_x,y or smooth movement), can see those pixels
-#define SEE_THRU		(1<<6) // can see through opaque objects
-#define SEE_BLACKNESS	(1<<7) // render dark tiles as blackness
-#define BLIND			(1<<8) // can't see anything
+#define SEETURFS		(1<<4) // undocumented, identical to SEE_TURFS
+#define SEE_PIXELS		(1<<8) // if an object is located on an unlit area, but some of its pixels are in a lit area (via pixel_x,y or smooth movement), can see those pixels
+#define SEE_THRU		(1<<9) // can see through opaque objects
+#define SEE_BLACKNESS	(1<<10) // render dark tiles as blackness
+#define BLIND			(1<<0) // can't see anything
 
 //client.perspective
 #define MOB_PERSPECTIVE 0
 #define EYE_PERSPECTIVE 1
 #define EDGE_PERSPECTIVE 2
-
-//These are used for the world.byond_version, client.byond_version, etc. vars too
-#define DM_VERSION 513
-#define DM_BUILD 1561
 
 //regex
 #define REGEX_QUOTE(a) regex((a), 1)
@@ -91,7 +109,7 @@
 #define SOUND_MUTE (1<<0)      // do not play the sound
 #define SOUND_PAUSED (1<<1)    // pause sound
 #define SOUND_STREAM (1<<2)    // create as a stream
-#define SOUND_UPDATE (1<<3)    // update a playing sound
+#define SOUND_UPDATE (1<<4)    // update a playing sound
 
 #define EXCEPTION(value) new/exception(value, __FILE__, __LINE__)
 
@@ -100,6 +118,12 @@
 #define COLORSPACE_HSV 1
 #define COLORSPACE_HSL 2
 #define COLORSPACE_HCY 3
+
+//See color matrix filter: filter(type="color", ...)
+#define FILTER_COLOR_RGB 0
+#define FILTER_COLOR_HSV 1
+#define FILTER_COLOR_HSL 2
+#define FILTER_COLOR_HCY 3
 
 //atom.appearance_flags
 #define LONG_GLIDE		(1<<0)
@@ -115,30 +139,26 @@
 #define PASS_MOUSE 		(1<<10)
 #define TILE_MOVER		(1<<11)
 
-//animate() easing arg
-#define LINEAR_EASING	1
-#define SINE_EASING		2
-#define CIRCULAR_EASING	3
-#define QUAD_EASING		4
-#define CUBIC_EASING	5
-#define BOUNCE_EASING	6
-#define ELASTIC_EASING	7
-#define BACK_EASING		8
-#define JUMP_EASING		9
-
-//undocumented matrix defines?
-#define MATRIX_TRANSLATE	(1<<0)
-#define MATRIX_ROTATE		(1<<1)
-#define MATRIX_SCALE		(1<<2)
-#define MATRIX_MODIFY		(1<<3)
+//Undocumented matrix defines (see https://www.byond.com/forum/post/1881375)
+#define MATRIX_COPY 0
+#define MATRIX_MULTIPLY 1 // idk why this is first, either
+#define MATRIX_ADD 2
+#define MATRIX_SUBTRACT 3
+#define MATRIX_INVERT 4
+#define MATRIX_INTERPOLATE 8
+//NOTE: Targets (specifically Para, afaik) only use these ones.
+#define MATRIX_ROTATE		5
+#define MATRIX_SCALE		6
+#define MATRIX_TRANSLATE	7
+#define MATRIX_MODIFY		128
 
 //world/Profile() arg
 #define PROFILE_STOP	1
 #define PROFILE_CLEAR	2
-#define PROFILE_AVERAGE 3
-#define PROFILE_START	4
-#define PROFILE_REFRESH	5
-#define PROFILE_RESTART	6
+#define PROFILE_AVERAGE 4
+#define PROFILE_START	0
+#define PROFILE_REFRESH	0
+#define PROFILE_RESTART	PROFILE_CLEAR
 
 //filter(type="alpha", ...) flags arg
 #define MASK_INVERSE	(1<<0)
@@ -169,3 +189,33 @@
 #define CONTROL_FREAK_ALL 		(1<<0)
 #define CONTROL_FREAK_SKIN		(1<<1)
 #define CONTROL_FREAK_MACROS	(1<<2)
+
+//atom.vis_flags
+#define VIS_INHERIT_ICON 1
+#define VIS_INHERIT_ICON_STATE 2
+#define VIS_INHERIT_DIR 4
+#define VIS_INHERIT_LAYER 8
+#define VIS_INHERIT_PLANE 16
+#define VIS_INHERIT_ID 32
+#define VIS_UNDERLAY 64
+#define VIS_HIDE 128
+
+//world.map_format
+#define TOPDOWN_MAP 0
+#define ISOMETRIC_MAP 1
+#define SIDE_MAP 2
+#define TILED_ICON_MAP 32768
+
+//world.movement_mode
+#define LEGACY_MOVEMENT_MODE 0
+#define TILE_MOVEMENT_MODE 1
+#define PIXEL_MOVEMENT_MODE 2
+
+//generator() distributions
+#define UNIFORM_RAND 0
+#define NORMAL_RAND 1
+#define LINEAR_RAND 2
+#define SQUARE_RAND 3
+
+// v515 json_encode() pretty print flag
+#define JSON_PRETTY_PRINT 1

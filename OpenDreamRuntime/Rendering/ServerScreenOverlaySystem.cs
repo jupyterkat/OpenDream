@@ -1,45 +1,24 @@
-﻿using OpenDreamRuntime.Objects;
+﻿using OpenDreamRuntime.Objects.Types;
 using OpenDreamShared.Rendering;
 using Robust.Server.GameStates;
-using Robust.Server.Player;
-using Robust.Shared.GameObjects;
-using Robust.Shared.IoC;
-using System.Collections.Generic;
 
-namespace OpenDreamRuntime.Rendering {
+namespace OpenDreamRuntime.Rendering;
 
-    class ServerScreenOverlaySystem : SharedScreenOverlaySystem {
-        [Dependency] IAtomManager _atomManager = default!;
+public sealed class ServerScreenOverlaySystem : SharedScreenOverlaySystem {
+    [Dependency] private readonly IEntityManager _entityManager = default!;
+    [Dependency] private readonly PvsOverrideSystem _pvsOverride = default!;
 
-        private Dictionary<IPlayerSession, HashSet<EntityUid>> _sessionToScreenObjects = new();
+    public void AddScreenObject(DreamConnection connection, DreamObjectMovable screenObject) {
+        _pvsOverride.AddForceSend(screenObject.Entity, connection.Session);
 
-        public override void Initialize() {
-            SubscribeLocalEvent<ExpandPvsEvent>(HandleExpandPvsEvent);
-        }
+        NetEntity ent = _entityManager.GetNetEntity(screenObject.Entity);
+        RaiseNetworkEvent(new AddScreenObjectEvent(ent), connection.Session.Channel);
+    }
 
-        public void AddScreenObject(DreamConnection connection, DreamObject screenObject) {
-            EntityUid entityId = _atomManager.GetAtomEntity(screenObject).Uid;
+    public void RemoveScreenObject(DreamConnection connection, DreamObjectMovable screenObject) {
+        _pvsOverride.RemoveForceSend(screenObject.Entity, connection.Session);
 
-            if (!_sessionToScreenObjects.TryGetValue(connection.Session, out HashSet<EntityUid> objects)) {
-                objects = new HashSet<EntityUid>();
-                _sessionToScreenObjects.Add(connection.Session, objects);
-            }
-
-            objects.Add(entityId);
-            RaiseNetworkEvent(new AddScreenObjectEvent(entityId), connection.Session.ConnectedClient);
-        }
-
-        public void RemoveScreenObject(DreamConnection connection, DreamObject screenObject) {
-            EntityUid entityId = _atomManager.GetAtomEntity(screenObject).Uid;
-
-            _sessionToScreenObjects[connection.Session].Remove(entityId);
-            RaiseNetworkEvent(new RemoveScreenObjectEvent(entityId), connection.Session.ConnectedClient);
-        }
-
-        private void HandleExpandPvsEvent(ref ExpandPvsEvent e) {
-            if (_sessionToScreenObjects.TryGetValue(e.Session, out HashSet<EntityUid> objects)) {
-                e.Entities.AddRange(objects);
-            }
-        }
+        NetEntity ent = _entityManager.GetNetEntity(screenObject.Entity);
+        RaiseNetworkEvent(new RemoveScreenObjectEvent(ent), connection.Session.Channel);
     }
 }

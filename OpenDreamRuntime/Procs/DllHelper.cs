@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
+﻿using System.IO;
 using System.Runtime.InteropServices;
 using OpenDreamRuntime.Resources;
 
@@ -18,7 +16,7 @@ namespace OpenDreamRuntime.Procs
             var dll = GetDll(resource, dllName);
 
             if (!NativeLibrary.TryGetExport(dll, funcName, out var export))
-                throw new MissingMethodException($"FFI: Unable to find symbol {export} in library {dllName}");
+                throw new MissingMethodException($"FFI: Unable to find symbol {funcName} in library {dllName}");
 
             return (delegate* unmanaged<int, byte**, byte*>)export;
         }
@@ -29,7 +27,7 @@ namespace OpenDreamRuntime.Procs
                 return dll;
 
             if (!TryResolveDll(resource, dllName, out dll))
-                throw new DllNotFoundException($"FFI: Unable to load {dllName}");
+                throw new DllNotFoundException($"FFI: Unable to load {dllName}, unknown error. Did you remember to build a 64-bit DLL instead of 32-bit?"); //unknown because NativeLibrary doesn't give any error information.
 
             LoadedDlls.Add(dllName, dll);
             return dll;
@@ -41,10 +39,9 @@ namespace OpenDreamRuntime.Procs
                 return true;
 
             // Simple load didn't pass, try next to dmb.
-            var root = resource.RootPath;
-            var fullPath = Path.Combine(root, dllName);
-
-            return NativeLibrary.TryLoad(fullPath, out dll);
+            if(!File.Exists(dllName))
+                throw new DllNotFoundException($"FFI: Unable to load DLL {dllName}. File not found.");
+            return NativeLibrary.TryLoad(dllName, out dll);
         }
     }
 }

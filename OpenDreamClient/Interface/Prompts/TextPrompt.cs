@@ -1,22 +1,29 @@
-﻿using System;
-using OpenDreamShared.Dream.Procs;
-using Robust.Client.UserInterface;
+﻿using OpenDreamShared.Dream;
 using Robust.Client.UserInterface.Controls;
 
-namespace OpenDreamClient.Interface.Prompts
-{
-    class TextPrompt : InputWindow {
-        public TextPrompt(int promptId, String title, String message, String defaultValue, bool canCancel) : base(promptId, title, message, defaultValue, canCancel) { }
+namespace OpenDreamClient.Interface.Prompts;
 
-        protected override Control CreateInputControl(String defaultValue) {
-            return new LineEdit {
-                Text = defaultValue,
-                VerticalAlignment = VAlignment.Top
-            };
-        }
+internal sealed class TextPrompt : InputWindow {
+    private readonly LineEdit _textEdit;
 
-        protected override void OkButtonClicked() {
-            FinishPrompt(DMValueType.Text, ((LineEdit)_inputControl).Text);
-        }
+    public TextPrompt(string title, string message, string defaultValue, bool canCancel,
+        Action<DreamValueType, object?>? onClose) : base(title, message, canCancel, onClose) {
+        MinHeight = 100;
+
+        _textEdit = new LineEdit {
+            Text = defaultValue,
+            VerticalAlignment = VAlignment.Top
+        };
+
+        _textEdit.OnTextEntered += TextEdit_TextEntered;
+        SetPromptControl(_textEdit);
+    }
+
+    protected override void OkButtonClicked() {
+        FinishPrompt(DreamValueType.Text, _textEdit.Text);
+    }
+
+    private void TextEdit_TextEntered(LineEdit.LineEditEventArgs e) {
+        ButtonClicked(DefaultButton);
     }
 }

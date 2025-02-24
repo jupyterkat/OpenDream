@@ -1,38 +1,29 @@
-using System;
 using System.IO;
+using JetBrains.Annotations;
+using OpenDreamShared.Network.Messages;
 using Robust.Client.Audio;
-using Robust.Client.Graphics;
-using Robust.Shared.Audio;
-using Robust.Shared.IoC;
-using Robust.Shared.Log;
 
-namespace OpenDreamClient.Resources.ResourceTypes
-{
-    public class ResourceSound : DreamResource {
-        private readonly AudioStream _stream;
+namespace OpenDreamClient.Resources.ResourceTypes;
 
-        public ResourceSound(string resourcePath, byte[] data) : base(resourcePath, data) {
-            if (resourcePath.EndsWith(".ogg"))
-                _stream = IoCManager.Resolve<IClydeAudio>().LoadAudioOggVorbis(new MemoryStream(data), resourcePath);
-            else if (resourcePath.EndsWith(".wav"))
-                _stream = IoCManager.Resolve<IClydeAudio>().LoadAudioWav(new MemoryStream(data), resourcePath);
-            else
-                Logger.Fatal("Only *.ogg and *.wav audio files are supported.");
+[UsedImplicitly]
+public sealed class ResourceSound(int id, byte[] data) : DreamResource(id, data) {
+    private AudioStream? _stream;
+
+    public AudioStream? GetStream(MsgSound.FormatType format, IAudioManager audioManager) {
+        if (_stream == null) {
+            switch (format) {
+                case MsgSound.FormatType.Ogg:
+                    _stream = audioManager.LoadAudioOggVorbis(new MemoryStream(Data));
+                    break;
+                case MsgSound.FormatType.Wav:
+                    _stream = audioManager.LoadAudioWav(new MemoryStream(Data));
+                    break;
+                default:
+                    Logger.GetSawmill("opendream.audio").Fatal("Only *.ogg and *.wav audio files are supported.");
+                    break;
+            }
         }
 
-        public IClydeAudioSource Play(AudioParams audioParams)
-        {
-            var source = IoCManager.Resolve<IClydeAudio>().CreateAudioSource(_stream);
-
-            // TODO: Positional audio.
-            source.SetGlobal();
-            source.SetPitch(audioParams.PitchScale);
-            source.SetVolume(audioParams.Volume);
-            source.SetPlaybackPosition(audioParams.PlayOffsetSeconds);
-            source.IsLooping = audioParams.Loop;
-
-            source.StartPlaying();
-            return source;
-        }
+        return _stream;
     }
 }

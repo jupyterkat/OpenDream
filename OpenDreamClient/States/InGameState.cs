@@ -1,15 +1,11 @@
 using Robust.Client.State;
 
-namespace OpenDreamClient.States
-{
-    public class InGameState : State
-    {
-        public override void Startup()
-        {
-        }
+namespace OpenDreamClient.States;
 
-        public override void Shutdown()
-        {
-        }
+public sealed class InGameState : State {
+    protected override void Startup() {
+    }
+
+    protected override void Shutdown() {
     }
 }

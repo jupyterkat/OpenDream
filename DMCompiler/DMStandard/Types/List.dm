@@ -1,22 +1,16 @@
 ﻿/list
 	var/len
+	var/const/type = /list
 
 	proc/New(Size)
-		if (Size != null) len = Size
 
 	proc/Add(Item1)
 	proc/Copy(Start = 1, End = 0)
 	proc/Cut(Start = 1, End = 0)
 	proc/Find(Elem, Start = 1, End = 0)
 	proc/Insert(Index, Item1)
+	proc/Join(Glue as text|null, Start = 1 as num, End = 0 as num) as text
 	proc/Remove(Item1)
+	proc/RemoveAll(Item1)
 	proc/Swap(Index1, Index2)
-
-	proc/Join(Glue, Start = 1, End = 0)
-		if (End == 0) End = src.len
-
-		var/result = ""
-		for (var/i in Start to End)
-			result += "[src[i]][(i != End) ? Glue : null]"
-
-		return result
+	proc/Splice(Start = 1 as num, End = 0 as num, Item1, ...) as null

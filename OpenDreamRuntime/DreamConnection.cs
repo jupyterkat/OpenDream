@@ -1,367 +1,535 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 using System.Web;
 using OpenDreamRuntime.Objects;
-using OpenDreamRuntime.Procs;
+using OpenDreamRuntime.Objects.Types;
 using OpenDreamRuntime.Procs.Native;
+using OpenDreamRuntime.Rendering;
 using OpenDreamRuntime.Resources;
 using OpenDreamShared.Dream;
-using OpenDreamShared.Dream.Procs;
 using OpenDreamShared.Network.Messages;
-using Robust.Server.Player;
 using Robust.Shared.Enums;
-using Robust.Shared.IoC;
-using Robust.Shared.Log;
-using Robust.Shared.Maths;
-using Robust.Shared.Network;
-using Robust.Shared.ViewVariables;
+using Robust.Shared.Player;
 
-namespace OpenDreamRuntime
-{
-    public class DreamConnection
-    {
-        [Dependency] private readonly IServerNetManager _netManager = default!;
-        [Dependency] private readonly IDreamManager _dreamManager = default!;
-        [Dependency] private readonly IAtomManager _atomManager = default!;
+namespace OpenDreamRuntime;
 
-        [ViewVariables] private Dictionary<string, DreamProc> _availableVerbs = new();
-        [ViewVariables] private Dictionary<string, List<string>> _statPanels = new();
-        [ViewVariables] private bool _currentlyUpdatingStat;
-        [ViewVariables] public IPlayerSession Session { get; }
+public sealed class DreamConnection {
+    [Dependency] private readonly DreamManager _dreamManager = default!;
+    [Dependency] private readonly DreamObjectTree _objectTree = default!;
+    [Dependency] private readonly DreamResourceManager _resourceManager = default!;
+    [Dependency] private readonly WalkManager _walkManager = default!;
+    [Dependency] private readonly IEntitySystemManager _entitySystemManager = default!;
+    [Dependency] private readonly ISharedPlayerManager _playerManager = default!;
 
-        [ViewVariables] public DreamObject ClientDreamObject;
+    private readonly ServerScreenOverlaySystem? _screenOverlaySystem;
+    private readonly ServerClientImagesSystem? _clientImagesSystem;
+    private readonly ServerVerbSystem? _verbSystem;
 
-        [ViewVariables] private DreamObject _mobDreamObject;
+    [ViewVariables] private readonly Dictionary<string, List<(string, string, string?)>> _statPanels = new();
+    [ViewVariables] private bool _currentlyUpdatingStat;
 
-        [ViewVariables] private string _outputStatPanel;
-        [ViewVariables] private string _selectedStatPanel;
-        [ViewVariables] private Dictionary<int, Action<DreamValue>> _promptEvents = new();
-        [ViewVariables] private int _nextPromptEvent = 1;
+    [ViewVariables] public ICommonSession? Session { get; private set; }
+    [ViewVariables] public DreamObjectClient? Client { get; private set; }
+    [ViewVariables] public string Key { get; private set; }
 
-        public string SelectedStatPanel {
-            get => _selectedStatPanel;
-            set {
-                _selectedStatPanel = value;
-                var msg = _netManager.CreateNetMessage<MsgSelectStatPanel>();
-                msg.StatPanel = value;
-                Session.ConnectedClient.SendMessage(msg);
-            }
-        }
+    [ViewVariables] public DreamObjectMob? Mob {
+        get => _mob;
+        set {
+            if (_mob != value) {
+                var oldMob = _mob;
+                _mob = value;
 
-        public DreamObject MobDreamObject
-        {
-            get => _mobDreamObject;
-            set
-            {
-                if (_mobDreamObject != value)
-                {
-                    if (_mobDreamObject != null) _mobDreamObject.SpawnProc("Logout");
+                if (oldMob != null) {
+                    oldMob.Key = null;
+                    oldMob.SpawnProc("Logout");
+                    oldMob.Connection = null;
+                }
 
-                    if (value != null && value.IsSubtypeOf(DreamPath.Mob))
-                    {
-                        DreamConnection oldMobConnection = _dreamManager.GetConnectionFromMob(value);
-                        if (oldMobConnection != null) oldMobConnection.MobDreamObject = null;
+                StatObj = new(value);
+                if (Eye != null && Eye == oldMob) {
+                    Eye = value;
+                }
 
-                        _mobDreamObject = value;
-                        ClientDreamObject?.SetVariable("eye", new DreamValue(_mobDreamObject));
-                        _mobDreamObject.SpawnProc("Login");
-                        Session.AttachToEntity(_atomManager.GetAtomEntity(_mobDreamObject));
-                    }
-                    else
-                    {
-                        Session.DetachFromEntity();
-                        _mobDreamObject = null;
-                    }
+                if (_mob != null) {
+                    // If the mob is already owned by another player, kick them out
+                    if (_mob.Connection != null)
+                        _mob.Connection.Mob = null;
 
-                    UpdateAvailableVerbs();
+                    _mob.Connection = this;
+                    _mob.Key = Key;
+                    _mob.SpawnProc("Login", usr: _mob);
                 }
             }
         }
+    }
 
-        public DreamConnection(IPlayerSession session)
-        {
-            IoCManager.InjectDependencies(this);
-
-            Session = session;
+    [ViewVariables] public DreamObjectMovable? Eye {
+        get => _eye;
+        set {
+            _eye = value;
+            _playerManager.SetAttachedEntity(Session!, _eye?.Entity);
         }
+    }
 
-        public void UpdateAvailableVerbs()
-        {
-            _availableVerbs.Clear();
+    [ViewVariables]
+    public DreamValue StatObj { get; set; } // This can be just any DreamValue. Only atoms will function though.
 
-            if (MobDreamObject != null)
-            {
-                List<DreamValue> mobVerbPaths = MobDreamObject.GetVariable("verbs").GetValueAsDreamList().GetValues();
+    [ViewVariables] private string? _outputStatPanel;
+    [ViewVariables] private string? _selectedStatPanel;
+    [ViewVariables] private readonly Dictionary<int, Action<DreamValue>> _promptEvents = new();
+    [ViewVariables] private int _nextPromptEvent = 1;
+    private readonly Dictionary<string, DreamResource> _permittedBrowseRscFiles = new();
+    private DreamObjectMob? _mob;
+    private DreamObjectMovable? _eye;
 
-                foreach (DreamValue mobVerbPath in mobVerbPaths)
-                {
-                    DreamPath path = mobVerbPath.GetValueAsPath();
+    private readonly ISawmill _sawmill = Logger.GetSawmill("opendream.connection");
 
-                    _availableVerbs.Add(path.LastElement, MobDreamObject.GetProc(path.LastElement));
-                }
+    public string? SelectedStatPanel {
+        get => _selectedStatPanel;
+        set {
+            _selectedStatPanel = value;
+
+            var msg = new MsgSelectStatPanel() { StatPanel = value };
+            Session?.Channel.SendMessage(msg);
+        }
+    }
+
+    public DreamConnection(string key) {
+        IoCManager.InjectDependencies(this);
+        Key = key;
+
+        _entitySystemManager.TryGetEntitySystem(out _screenOverlaySystem);
+        _entitySystemManager.TryGetEntitySystem(out _clientImagesSystem);
+        _entitySystemManager.TryGetEntitySystem(out _verbSystem);
+    }
+
+    public void HandleConnection(ICommonSession session) {
+        Session = session;
+
+        Client = new DreamObjectClient(_objectTree.Client.ObjectDefinition, this, _screenOverlaySystem, _clientImagesSystem);
+        Client.InitSpawn(new());
+
+        _verbSystem?.UpdateClientVerbs(Client);
+        SendClientInfoUpdate();
+    }
+
+    public void HandleDisconnection() {
+        if (Session == null || Client == null) // Already disconnected?
+            return;
+
+        if (_mob != null) {
+            // Don't null out the ckey here
+            _mob.SpawnProc("Logout");
+
+            if (_mob != null) { // Logout() may have removed our mob
+                _mob.Connection = null;
+                _mob = null;
             }
-
-            var msg = _netManager.CreateNetMessage<MsgUpdateAvailableVerbs>();
-            msg.AvailableVerbs = _availableVerbs.Keys.ToArray();
-            Session.ConnectedClient.SendMessage(msg);
         }
 
-        public void UpdateStat()
-        {
-            if (_currentlyUpdatingStat)
-                return;
+        Client.Delete();
+        Client = null;
 
-            _currentlyUpdatingStat = true;
-            _statPanels.Clear();
+        Session = null;
+    }
 
-            DreamThread.Run(async (state) =>
-            {
-                try
-                {
-                    var statProc = ClientDreamObject.GetProc("Stat");
+    public void UpdateStat() {
+        if (Session == null || Client == null || _currentlyUpdatingStat)
+            return;
 
-                    await state.Call(statProc, ClientDreamObject, _mobDreamObject, new DreamProcArguments(null));
-                    if (Session.Status == SessionStatus.InGame)
-                    {
-                        var msg = _netManager.CreateNetMessage<MsgUpdateStatPanels>();
-                        msg.StatPanels = _statPanels;
-                        Session.ConnectedClient.SendMessage(msg);
-                    }
+        _currentlyUpdatingStat = true;
+        _statPanels.Clear();
 
-                    return DreamValue.Null;
+        DreamThread.Run("Stat", async state => {
+            try {
+                var statProc = Client.GetProc("Stat");
+
+                await state.Call(statProc, Client, Mob);
+                if (Session.Status == SessionStatus.InGame) {
+                    var msg = new MsgUpdateStatPanels(_statPanels);
+                    Session?.Channel.SendMessage(msg);
                 }
-                finally
-                {
-                    _currentlyUpdatingStat = false;
-                }
-            });
-        }
 
-        public void SetOutputStatPanel(string name)
-        {
-            if (!_statPanels.ContainsKey(name)) _statPanels.Add(name, new List<string>());
-
-            _outputStatPanel = name;
-        }
-
-        public void AddStatPanelLine(string text)
-        {
-            if (_outputStatPanel == null || !_statPanels.ContainsKey(_outputStatPanel))
-                SetOutputStatPanel("Stats");
-
-            _statPanels[_outputStatPanel].Add(text);
-        }
-
-        public void HandleMsgSelectStatPanel(MsgSelectStatPanel message)
-        {
-            _selectedStatPanel = message.StatPanel;
-        }
-
-        public void HandleMsgPromptResponse(MsgPromptResponse message)
-        {
-            if (!_promptEvents.TryGetValue(message.PromptId, out Action<DreamValue> promptEvent))
-            {
-                Logger.Warning($"{message.MsgChannel}: Received MsgPromptResponse for prompt {message.PromptId} which does not exist.");
-                return;
+                return DreamValue.Null;
+            } finally {
+                _currentlyUpdatingStat = false;
             }
+        });
+    }
 
-            DreamValue value = message.Type switch {
-                DMValueType.Null => DreamValue.Null,
-                DMValueType.Text or DMValueType.Message => new DreamValue((string)message.Value),
-                DMValueType.Num => new DreamValue((float)message.Value),
-                _ => throw new Exception("Invalid prompt response '" + message.Type + "'")
+    public void SendClientInfoUpdate() {
+        MsgUpdateClientInfo msg = new() {
+            View = Client!.View,
+            ShowPopupMenus = Client!.ShowPopupMenus
+        };
+
+        Session?.Channel.SendMessage(msg);
+    }
+
+    public void SetOutputStatPanel(string name) {
+        if (!_statPanels.ContainsKey(name))
+            _statPanels.Add(name, new());
+
+        _outputStatPanel = name;
+    }
+
+    public void AddStatPanelLine(string name, string value, string? atomRef) {
+        if (_outputStatPanel == null || !_statPanels.ContainsKey(_outputStatPanel))
+            SetOutputStatPanel("Stats");
+
+        _statPanels[_outputStatPanel].Add((name, value, atomRef));
+    }
+
+    public void HandleMsgSelectStatPanel(MsgSelectStatPanel message) {
+        _selectedStatPanel = message.StatPanel;
+    }
+
+    public void HandleMsgPromptResponse(MsgPromptResponse message) {
+        if (!_promptEvents.TryGetValue(message.PromptId, out var promptEvent)) {
+            _sawmill.Warning($"{message.MsgChannel}: Received MsgPromptResponse for prompt {message.PromptId} which does not exist.");
+            return;
+        }
+
+        if (!TryConvertPromptResponse(message.Type, message.Value, out var value))
+            throw new Exception($"Invalid prompt response '{value}'");
+
+        promptEvent.Invoke(value);
+        _promptEvents.Remove(message.PromptId);
+    }
+
+    public void HandleMsgTopic(MsgTopic pTopic) {
+        DreamList hrefList = DreamProcNativeRoot.params2list(_objectTree, HttpUtility.UrlDecode(pTopic.Query));
+        DreamValue srcRefValue = hrefList.GetValue(new DreamValue("src"));
+        DreamValue src = DreamValue.Null;
+
+        if (srcRefValue.TryGetValueAsString(out var srcRef)) {
+            src = _dreamManager.LocateRef(srcRef);
+        }
+
+        Client?.SpawnProc("Topic", usr: Mob, new(pTopic.Query), new(hrefList), src);
+    }
+
+    public void OutputDreamValue(DreamValue value) {
+        if (value.TryGetValueAsDreamObject<DreamObjectSound>(out var outputObject)) {
+            ushort channel = (ushort)outputObject.GetVariable("channel").GetValueAsInteger();
+            ushort volume = (ushort)outputObject.GetVariable("volume").GetValueAsInteger();
+            float offset = outputObject.GetVariable("offset").UnsafeGetValueAsFloat();
+            DreamValue file = outputObject.GetVariable("file");
+
+            var msg = new MsgSound() {
+                Channel = channel,
+                Volume = volume,
+                Offset = offset
             };
 
-            promptEvent.Invoke(value);
-            _promptEvents.Remove(message.PromptId);
-        }
-
-        public void HandleMsgTopic(MsgTopic pTopic) {
-            DreamList hrefList = DreamProcNativeRoot.params2list(HttpUtility.UrlDecode(pTopic.Query));
-            DreamValue srcRefValue = hrefList.GetValue(new DreamValue("src"));
-            DreamObject src = null;
-
-            if (srcRefValue.Value != null) {
-                int srcRef = int.Parse(srcRefValue.GetValueAsString());
-
-                src = DreamObject.GetFromReferenceID(_dreamManager, srcRef);
-            }
-
-            DreamProcArguments topicArguments = new DreamProcArguments(new() {
-                new DreamValue(pTopic.Query),
-                new DreamValue(hrefList),
-                new DreamValue(src)
-            });
-
-            ClientDreamObject?.SpawnProc("Topic", topicArguments, MobDreamObject);
-        }
-
-
-        public void OutputDreamValue(DreamValue value) {
-            if (value.Type == DreamValue.DreamValueType.DreamObject) {
-                DreamObject outputObject = value.GetValueAsDreamObject();
-
-                if (outputObject?.IsSubtypeOf(DreamPath.Sound) == true) {
-                    UInt16 channel = (UInt16)outputObject.GetVariable("channel").GetValueAsInteger();
-                    UInt16 volume = (UInt16)outputObject.GetVariable("volume").GetValueAsInteger();
-                    DreamValue file = outputObject.GetVariable("file");
-
-                    var msg = _netManager.CreateNetMessage<MsgSound>();
-                    msg.Channel = channel;
-                    msg.Volume = volume;
-
-
-                    if (file.Type == DreamValue.DreamValueType.String || file == DreamValue.Null) {
-                        msg.File = (string)file.Value;
-                    } else if (file.TryGetValueAsDreamResource(out DreamResource resource)) {
-                        msg.File = resource.ResourcePath;
-                    } else {
-                        throw new ArgumentException("Cannot output " + value, nameof(value));
-                    }
-
-                    Session.ConnectedClient.SendMessage(msg);
-
-                    return;
+            if (!file.TryGetValueAsDreamResource(out var soundResource)) {
+                if (file.TryGetValueAsString(out var soundPath)) {
+                    soundResource = _resourceManager.LoadResource(soundPath);
+                } else if (!file.IsNull) {
+                    throw new ArgumentException($"Cannot output {value}", nameof(value));
                 }
             }
 
-            OutputControl(value.Stringify(), null);
-        }
-
-        public void OutputControl(string message, string control) {
-            var msg = _netManager.CreateNetMessage<MsgOutput>();
-            msg.Value = message;
-            msg.Control = control;
-            Session.ConnectedClient.SendMessage(msg);
-        }
-
-        public void HandleCommand(string command)
-        {
-            switch (command) {
-                //TODO: Maybe move these verbs to DM code?
-                case ".north": ClientDreamObject.SpawnProc("North"); break;
-                case ".east": ClientDreamObject.SpawnProc("East"); break;
-                case ".south": ClientDreamObject.SpawnProc("South"); break;
-                case ".west": ClientDreamObject.SpawnProc("West"); break;
-                case ".northeast": ClientDreamObject.SpawnProc("Northeast"); break;
-                case ".southeast": ClientDreamObject.SpawnProc("Southeast"); break;
-                case ".southwest": ClientDreamObject.SpawnProc("Southwest"); break;
-                case ".northwest": ClientDreamObject.SpawnProc("Northwest"); break;
-                case ".center": ClientDreamObject.SpawnProc("Center"); break;
-
-                default: {
-                    if (_availableVerbs.TryGetValue(command, out DreamProc verb)) {
-                        DreamThread.Run(async (state) => {
-                            Dictionary<String, DreamValue> arguments = new();
-
-                            // TODO: this should probably be done on the client, shouldn't it?
-                            for (int i = 0; i < verb.ArgumentNames.Count; i++) {
-                                String argumentName = verb.ArgumentNames[i];
-                                DMValueType argumentType = verb.ArgumentTypes[i];
-                                DreamValue value = await Prompt(argumentType, title: String.Empty, // No settable title for verbs
-                                    argumentName, defaultValue: String.Empty); // No default value for verbs
-
-                                arguments.Add(argumentName, value);
-                            }
-
-                            await state.Call(verb, MobDreamObject, MobDreamObject, new DreamProcArguments(new(), arguments));
-                            return DreamValue.Null;
-                        });
-                    }
-
-                    break;
-                }
+            msg.ResourceId = soundResource?.Id;
+            if (soundResource?.ResourcePath is { } resourcePath) {
+                if (resourcePath.EndsWith(".ogg"))
+                    msg.Format = MsgSound.FormatType.Ogg;
+                else if (resourcePath.EndsWith(".wav"))
+                    msg.Format = MsgSound.FormatType.Wav;
+                else
+                    throw new Exception($"Sound {value} is not a supported file type");
             }
+
+            Session?.Channel.SendMessage(msg);
+            return;
         }
 
-        public Task<DreamValue> Prompt(DMValueType types, String title, String message, String defaultValue) {
-            var task = MakePromptTask(out var promptId);
+        OutputControl(value.Stringify(), null);
+    }
 
-            var msg = _netManager.CreateNetMessage<MsgPrompt>();
-            msg.PromptId = promptId;
-            msg.Title = title;
-            msg.Message = message;
-            msg.Types = types;
-            msg.DefaultValue = default;
-            Session.ConnectedClient.SendMessage(msg);
+    public void OutputControl(string message, string? control) {
+        var msg = new MsgOutput() {
+            Value = message,
+            Control = control
+        };
 
-            return task;
+        Session?.Channel.SendMessage(msg);
+    }
+
+    // TODO: Remove this. Vestigial and doesn't run all commands.
+    public void HandleCommand(string fullCommand) {
+        string[] args = fullCommand.Split(' ', StringSplitOptions.TrimEntries);
+        string command = args[0].ToLowerInvariant(); // Case-insensitive
+
+        switch (command) {
+            case ".north":
+            case ".east":
+            case ".south":
+            case ".west":
+            case ".northeast":
+            case ".southeast":
+            case ".southwest":
+            case ".northwest":
+            case ".center":
+                string movementProc = command switch {
+                    ".north" => "North",
+                    ".east" => "East",
+                    ".south" => "South",
+                    ".west" => "West",
+                    ".northeast" => "Northeast",
+                    ".southeast" => "Southeast",
+                    ".southwest" => "Southwest",
+                    ".northwest" => "Northwest",
+                    ".center" => "Center",
+                    _ => throw new ArgumentOutOfRangeException()
+                };
+
+                if (Mob != null)
+                    _walkManager.StopWalks(Mob);
+                Client?.SpawnProc(movementProc, Mob); break;
+        }
+    }
+
+    public Task<DreamValue> Prompt(DreamValueType types, string title, string message, string defaultValue) {
+        var task = MakePromptTask(out var promptId);
+        var msg = new MsgPrompt {
+            PromptId = promptId,
+            Title = title,
+            Message = message,
+            Types = types,
+            DefaultValue = defaultValue
+        };
+
+        Session?.Channel.SendMessage(msg);
+        return task;
+    }
+
+    public async Task<DreamValue> PromptList(DreamValueType types, DreamList list, string title, string message, DreamValue defaultValue) {
+        List<DreamValue> listValues = list.GetValues();
+
+        List<string> promptValues = new(listValues.Count);
+        foreach (var value in listValues) {
+            if (types.HasFlag(DreamValueType.Obj) && !value.TryGetValueAsDreamObject<DreamObjectMovable>(out _))
+                continue;
+            if (types.HasFlag(DreamValueType.Mob) && !value.TryGetValueAsDreamObject<DreamObjectMob>(out _))
+                continue;
+            if (types.HasFlag(DreamValueType.Turf) && !value.TryGetValueAsDreamObject<DreamObjectTurf>(out _))
+                continue;
+            if (types.HasFlag(DreamValueType.Area) && !value.TryGetValueAsDreamObject<DreamObjectArea>(out _))
+                continue;
+
+            promptValues.Add(value.Stringify());
         }
 
+        if (promptValues.Count == 0)
+            return DreamValue.Null;
 
-        public Task<DreamValue> Alert(String title, String message, String button1, String button2, String button3)
-        {
-            var task = MakePromptTask(out var promptId);
+        var task = MakePromptTask(out var promptId);
+        var msg = new MsgPromptList {
+            PromptId = promptId,
+            Title = title,
+            Message = message,
+            CanCancel = (types & DreamValueType.Null) == DreamValueType.Null,
+            DefaultValue = defaultValue.Stringify(),
+            Values = promptValues.ToArray()
+        };
 
-            var msg = _netManager.CreateNetMessage<MsgAlert>();
-            msg.PromptId = promptId;
-            msg.Title = title;
-            msg.Message = message;
-            msg.Button1 = button1;
-            msg.Button2 = button2;
-            msg.Button3 = button3;
-            Session.ConnectedClient.SendMessage(msg);
+        Session?.Channel.SendMessage(msg);
 
-            return task;
+        // The client returns the index of the selected item, this needs turned back into the DreamValue.
+        var selectedIndex = await task;
+        if (selectedIndex.TryGetValueAsInteger(out int index) && index < listValues.Count) {
+            return listValues[index];
         }
 
-        private Task<DreamValue> MakePromptTask(out int promptId)
-        {
-            TaskCompletionSource<DreamValue> tcs = new();
-            promptId = _nextPromptEvent++;
+        // Client returned an invalid value.
+        // Return the first value in the list, or null if cancellable
+        return msg.CanCancel ? DreamValue.Null : listValues[0];
+    }
 
-            _promptEvents.Add(promptId, response => {
-                tcs.TrySetResult(response);
-            });
+    public Task<DreamValue> WinExists(string controlId) {
+        var task = MakePromptTask(out var promptId);
+        var msg = new MsgWinExists() {
+            PromptId = promptId,
+            ControlId = controlId
+        };
 
-            return tcs.Task;
+        Session?.Channel.SendMessage(msg);
+
+        return task;
+    }
+
+    public Task<DreamValue> WinGet(string controlId, string queryValue) {
+        var task = MakePromptTask(out var promptId);
+        var msg = new MsgWinGet() {
+            PromptId = promptId,
+            ControlId = controlId,
+            QueryValue = queryValue
+        };
+
+        Session?.Channel.SendMessage(msg);
+
+        return task;
+    }
+
+    public Task<DreamValue> Alert(String title, String message, String button1, String button2, String button3) {
+        var task = MakePromptTask(out var promptId);
+        var msg = new MsgAlert() {
+            PromptId = promptId,
+            Title = title,
+            Message = message,
+            Button1 = button1,
+            Button2 = button2,
+            Button3 = button3
+        };
+
+        Session?.Channel.SendMessage(msg);
+        return task;
+    }
+
+    private Task<DreamValue> MakePromptTask(out int promptId) {
+        TaskCompletionSource<DreamValue> tcs = new();
+        promptId = _nextPromptEvent++;
+
+        _promptEvents.Add(promptId, response => {
+            tcs.TrySetResult(response);
+        });
+
+        return tcs.Task;
+    }
+
+    public void BrowseResource(DreamResource resource, string filename) {
+        if (resource.ResourceData == null)
+            return;
+
+        var msg = new MsgBrowseResource() {
+            Filename = filename,
+            DataHash = resource.ResourceData.Length //TODO: make a quick hash that can work clientside too
+        };
+        _permittedBrowseRscFiles[filename] = resource;
+
+        Session?.Channel.SendMessage(msg);
+    }
+
+    public void HandleBrowseResourceRequest(string filename) {
+        if(_permittedBrowseRscFiles.TryGetValue(filename, out var dreamResource)) {
+            var msg = new MsgBrowseResourceResponse() {
+                Filename = filename,
+                Data = dreamResource.ResourceData! //honestly if this is null, something mega fucked up has happened and we should error hard
+            };
+            _permittedBrowseRscFiles.Remove(filename);
+            Session?.Channel.SendMessage(msg);
+        } else {
+            _sawmill.Error($"Client({Session}) requested a browse_rsc file they had not been permitted to request ({filename}).");
         }
 
-        public void BrowseResource(DreamResource resource, string filename)
-        {
-            var msg = _netManager.CreateNetMessage<MsgBrowseResource>();
-            msg.Filename = filename;
-            msg.Data = resource.ResourceData;
-            Session.ConnectedClient.SendMessage(msg);
-        }
+    }
 
-        public void Browse(string body, string options) {
-            string window = null;
-            Vector2i size = (480, 480);
+    public void Browse(string? body, string? options) {
+        string? window = null;
+        Vector2i size = (480, 480);
 
-            string[] separated = options.Split(',', ';', '&');
-            foreach (string option in separated) {
+        if (options != null) {
+            foreach (string option in options.Split(',', ';', '&')) {
                 string optionTrimmed = option.Trim();
 
-                if (optionTrimmed != String.Empty) {
-                    string[] optionSeparated = optionTrimmed.Split("=");
+                if (optionTrimmed != string.Empty) {
+                    string[] optionSeparated = optionTrimmed.Split("=", 2);
                     string key = optionSeparated[0];
                     string value = optionSeparated[1];
 
-                    if (key == "window") window = value;
-                    if (key == "size") {
-                        string[] sizeSeparated = value.Split("x");
+                    if (key == "window") {
+                        window = value;
+                    } else if (key == "size") {
+                        string[] sizeSeparated = value.Split("x", 2);
 
                         size = (int.Parse(sizeSeparated[0]), int.Parse(sizeSeparated[1]));
                     }
                 }
             }
-
-            var msg = _netManager.CreateNetMessage<MsgBrowse>();
-            msg.Size = size;
-            msg.Window = window;
-            msg.HtmlSource = body;
-            Session.ConnectedClient.SendMessage(msg);
         }
 
-        public void WinSet(string controlId, string @params)
-        {
-            var msg = _netManager.CreateNetMessage<MsgWinSet>();
-            msg.ControlId = controlId;
-            msg.Params = @params;
-            Session.ConnectedClient.SendMessage(msg);
+        var msg = new MsgBrowse() {
+            Size = size,
+            Window = window,
+            HtmlSource = body
+        };
+
+        Session?.Channel.SendMessage(msg);
+    }
+
+    public void WinSet(string? controlId, string @params) {
+        var msg = new MsgWinSet() {
+            ControlId = controlId,
+            Params = @params
+        };
+
+        Session?.Channel.SendMessage(msg);
+    }
+
+    public void WinClone(string controlId, string cloneId) {
+        var msg = new MsgWinClone() { ControlId = controlId, CloneId = cloneId };
+
+        Session?.Channel.SendMessage(msg);
+    }
+
+    /// <summary>
+    /// Sends a URL to the client to open.
+    /// Can be a website, a topic call, or another server to connect to.
+    /// </summary>
+    /// <param name="url">URL to open on the client's side</param>
+    public void SendLink(string url) {
+        var msg = new MsgLink {
+            Url = url
+        };
+
+        Session?.Channel.SendMessage(msg);
+    }
+
+    /// <summary>
+    /// Prompts the user to save a file to disk
+    /// </summary>
+    /// <param name="file">File to save</param>
+    /// <param name="suggestedName">Suggested name to save the file as</param>
+    public void SendFile(DreamResource file, string suggestedName) {
+        var msg = new MsgFtp {
+            ResourceId = file.Id,
+            SuggestedName = suggestedName
+        };
+
+        Session?.Channel.SendMessage(msg);
+    }
+
+    public bool TryConvertPromptResponse(DreamValueType type, object? value, out DreamValue converted) {
+        bool CanBe(DreamValueType canBeType) => (type == DreamValueType.Anything) || ((type & canBeType) != 0x0);
+
+        if (CanBe(DreamValueType.Null) && value == null) {
+            converted = DreamValue.Null;
+            return true;
+        } else if (CanBe(DreamValueType.Text | DreamValueType.Message | DreamValueType.CommandText) && value is string strVal) {
+            converted = new(strVal);
+            return true;
+        } else if (CanBe(DreamValueType.Num) && value is float numVal) {
+            converted = new DreamValue(numVal);
+            return true;
+        } else if (CanBe(DreamValueType.Color) && value is Color colorVal) {
+            converted = new DreamValue(colorVal.ToHexNoAlpha());
+            return true;
+        } else if (CanBe(type & DreamValueType.AllAtomTypes) && value is ClientObjectReference clientRef) {
+            var atom = _dreamManager.GetFromClientReference(this, clientRef);
+
+            if (atom != null) {
+                if ((atom.IsSubtypeOf(_objectTree.Obj) && !CanBe(DreamValueType.Obj)) ||
+                    (atom.IsSubtypeOf(_objectTree.Mob) && !CanBe(DreamValueType.Mob))) {
+                    converted = default;
+                    return false;
+                }
+
+                converted = new(atom);
+                return true;
+            }
         }
+
+        converted = default;
+        return false;
     }
 }
